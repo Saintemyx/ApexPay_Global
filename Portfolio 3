@@ -1,1 +1,67 @@
+ Core Transaction Logic Flows
+Scenario 1: P2P Fund Transfer Workflow
+Transaction Initialization:
+Accept authorization payload with idempotency key: source_account, destination_account, amount.
+Open the atomic boundary.
+Idempotency Check:
+Scan for the idempotency key in the transaction register. If it exists, return the cached result immediately to prevent duplicate charges.
+Deterministic Pessimistic Locking:
+Acquire explicit, exclusive row-level write locks on the two accounts.
+Deadlock Prevention Rule: Always lock accounts in ascending alphabetical order of their unique primary keys (e.g., lock Account A before Account B). This prevents circular lock-waits.
+Balance Verification:
+Read source account available balance. Check: available_balance >= transfer_amount. If insufficient, raise an exception and exit.
+Ledger Modification:
+Decrement source account current_balance and available_balance.
+Increment destination account current_balance and available_balance.
+Increment the row_version counter on both accounts.
+Journal and Audit Logging:
+Write record to TRANSACTIONS with status Settled.
+Write record to TRANSFER_DETAILS.
+Write two rows to BALANCE_AUDIT_LOGS capturing the updated states of both accounts.
+Commit Phase:
+Flush all operations to the Write-Ahead Log, release row locks, and return an approval receipt.
+Scenario 2: Compensating Transaction Reversal Workflow
+When an external payment rail reports an unrecoverable failure after internal debit execution:
+Open a new, distinct atomic transaction boundary.
+Locate the original transaction record using its unique settlement reference.
+Verify that the original status is Settled and has not already been reversed.
+Acquire an exclusive row-level lock on the source account.
+Increment the source account balance by the original transfer amount.
+Append a new record to TRANSACTIONS flagged as Reversal, referencing the original transaction_id.
+Write an audit log entry documenting the corrective balance change.
+Commit the transaction and notify the customer.
 
+3 Isolation Level Analysis & Concurrency Anomalies
+Code
++--------------------+-------------------+------------------------+----------------------+--------------------+
+| Isolation Level    | Dirty Read Risk   | Non-Repeatable Read    | Phantom Read Risk    | Lost Update Risk   |
++--------------------+-------------------+------------------------+----------------------+--------------------+
+| Read Uncommitted   | High Risk         | High Risk              | High Risk            | Vulnerable         |
+| Read Committed     | Fully Prevented   | Possible (Problematic) | Possible             | Vulnerable         |
+| Repeatable Read    | Fully Prevented   | Fully Prevented        | Prevented via MVCC   | Prevented (Fails)  |
+| Serializable       | Fully Prevented   | Fully Prevented        | Fully Prevented      | Fully Prevented    |
++--------------------+-------------------+------------------------+----------------------+--------------------+
+Why Read Committed Fails for Audits: The Non-Repeatable Read Hazard
+If a daily balance audit runs under the default Read Committed isolation level, it queries Account 1 (finding $1,000), pauses while a transfer moves $500 from Account 1 to Account 2, and then reads Account 2 (finding $1,500). The audit sees a combined balance of $2,500 instead of the real $2,000 total, creating a false balancing discrepancy.
+The ApexPay Standard: Repeatable Read and Serializable Modes
+General Transfers: Execute under Repeatable Read using snapshot isolation to ensure consistent balance checks throughout the transaction without reading uncommitted shifts from concurrent processes.
+Ledger Audits and Close-of-Day: Execute strictly under Serializable isolation via Serializable Snapshot Isolation (SSI), which aborts and rolls back any transaction that exhibits anomalous read/write dependency cycles.
+
+4 Concurrency Control Implementation Mechanisms
+Multi-Version Concurrency Control (MVCC) Mechanics
+ApexPay utilizes an MVCC database engine. When a transaction updates an account balance, the engine does not overwrite existing data pages in place. Instead:
+It writes a new version of the row marked with the current transaction's identifier.
+It flags the older row version with an expiry marker matching the same transaction ID.
+Concurrent read queries continue reading the older row version without pausing or locking. Readers never block writers, and writers never block readers.
+Code
+Row Versioning Mechanics:
++-----------------------------------------------------------------------------------------+
+| Row Version 1 (Account 101): Balance: $500.00 | Valid: Txn 100 to 205                   |
+| Row Version 2 (Account 101): Balance: $400.00 | Valid: Txn 205 to Inactive (Current)    |
+|                                                                                         |
+| Concurrent Read Query (Txn 202) -> Reads Version 1 (Sees historical $500.00)           |
+| Finalizing Transfer   (Txn 205) -> Commits Version 2 (Writes updated $400.00)          |
++-----------------------------------------------------------------------------------------+
+Deadlock Detection and Handling
+Lock Timeouts: All transaction lock requests use a hard timeout of 3,000ms.
+Deadlock Detection Graph: The database engine maintains an internal Directed Graph tracking active locks and waiting transactions. If a circular wait condition occurs (e.g., Transaction A holds Account 1 and waits for Account 2; Transaction B holds Account 2 and waits for Account 1), the engine identifies the cycle, aborts the younger transaction, rolls back its operations, and returns a serialization failure error for the client application to retry.
