@@ -1,3 +1,4 @@
+2.1 Case Study Overview: ApexPay Global Technologies
 ApexPay is a regulated digital neobank and financial technology platform providing consumer retail banking, corporate liquidity management, and instant peer-to-peer (P2P) transfers across multi-currency ledgers.
 Operational Scale
 Active User Base: 2.5 million verified retail and commercial customers.
@@ -9,3 +10,124 @@ Strict Balance Invariants: Standard consumer accounts must never reach a negativ
 Transaction Immutability: Once committed, a financial transaction record can never be modified or deleted. Errors must be rectified exclusively through compensating transactions (reversals).
 Comprehensive Auditability: Every balance change, system-level adjustment, or reconciliation check must generate an append-only audit trail capturing before-and-after states, timestamps, and authorized identities.
 Customer Identification: All accounts must link to a fully verified Customer record compliant with Know Your Customer (KYC) and Anti-Money Laundering (AML) standards.
+2.2 Conceptual Entity-Relationship Model
+Code
++------------------+             1:N             +------------------+
+|     CUSTOMER     |----------------------------<|     ACCOUNT      |
+|------------------|                             |------------------|
+| PK: customer_id  |                             | PK: account_id   |
+|     kyc_tier     |                             | FK: customer_id  |
+|     status       |                             |     currency     |
++------------------+                             |     balance      |
+        │                                        +------------------+
+        │ 1:N                                             │ 1:N
+        │                                                 │
+        ▼                                                 ▼
++------------------+             1:N             +------------------+
+|  CUSTOMER_AUDIT  |                             |   TRANSACTION    |
+|------------------|                             |------------------|
+| PK: audit_id     |                             | PK: txn_id       |
+| FK: customer_id  |                             | FK: src_acct_id  |
+|     change_type  |                             | FK: dest_acct_id |
++------------------+                             |     amount       |
+                                                 |     status       |
+                                                 +------------------+
+                                                          │
+                                                          │ 1:1
+                                                          ▼
+                                                 +------------------+
+                                                 | TRANSFER_DETAIL  |
+                                                 |------------------|
+                                                 | PK: transfer_id  |
+                                                 | FK: txn_id       |
+                                                 |     fx_rate      |
+                                                 |     network_rail |
+                                                 +------------------+
+Cardinality and Participation Rules
+CUSTOMER to ACCOUNT (1:N, Mandatory to Optional): A Customer must be registered before opening an account (mandatory participation). A Customer may hold zero accounts initially (e.g., during onboarding) or multiple accounts across distinct currencies.
+ACCOUNT to TRANSACTION (1:N, Mandatory to Optional): An Account can exist without transaction history. A Transaction must be linked to at least one valid source or destination account (mandatory participation).
+TRANSACTION to TRANSFER_DETAIL (1:1, Optional to Mandatory): Simple single-account actions (like fee debits or cash deposits) do not generate an external transfer detail record. P2P and international transfers require exactly one linked Transfer Detail record.
+ACCOUNT to BALANCE_AUDIT_LOG (1:N, Mandatory to Mandatory): Every account tracks at least one initial ledger snapshot and creates a new audit entry on every balance modification.
+2.3 Logical Relational Schema
+The relational schema is defined below using formal structural notation, documenting primary keys, foreign keys, physical nullability, and field domains.
+1. CUSTOMERS
+customer_id (UUID, Primary Key, Immutable)
+tax_identification_number (VARCHAR(32), Unique, Not Null)
+first_name (VARCHAR(64), Not Null)
+last_name (VARCHAR(64), Not Null)
+email_address (VARCHAR(255), Unique, Not Null)
+phone_number (VARCHAR(32), Unique, Not Null)
+kyc_status (VARCHAR(16), Not Null, Allowed: Pending, Verified, Suspended, Terminated)
+risk_score (DECIMAL(3,2), Not Null, Default: 0.00)
+created_timestamp (TIMESTAMP WITH TIME ZONE, Not Null)
+2. CURRENCIES
+currency_code (CHAR(3), Primary Key, ISO-4217 Alphabetic, e.g., USD, EUR, GBP)
+currency_name (VARCHAR(32), Not Null)
+decimal_places (SMALLINT, Not Null, Default: 2)
+is_active (BOOLEAN, Not Null, Default: True)
+3. ACCOUNTS
+account_id (UUID, Primary Key, Immutable)
+customer_id (UUID, Foreign Key referencing CUSTOMERS.customer_id, Not Null)
+account_number (VARCHAR(34), Unique, Not Null, IBAN or BBAN format)
+currency_code (CHAR(3), Foreign Key referencing CURRENCIES.currency_code, Not Null)
+account_type (VARCHAR(16), Not Null, Allowed: Retail_Checking, Savings, Corporate_Treasury, Escrow)
+current_balance (DECIMAL(18,4), Not Null, Default: 0.0000)
+available_balance (DECIMAL(18,4), Not Null, Default: 0.0000)
+overdraft_limit (DECIMAL(18,4), Not Null, Default: 0.0000)
+account_status (VARCHAR(16), Not Null, Allowed: Active, Frozen, Dormant, Closed)
+row_version (BIGINT, Not Null, Used for Optimistic Concurrency Control)
+opened_timestamp (TIMESTAMP WITH TIME ZONE, Not Null)
+4. TRANSACTIONS
+transaction_id (UUID, Primary Key, Immutable)
+source_account_id (UUID, Foreign Key referencing ACCOUNTS.account_id, Nullable for external deposits)
+destination_account_id (UUID, Foreign Key referencing ACCOUNTS.account_id, Nullable for external withdrawals)
+transaction_type (VARCHAR(24), Not Null, Allowed: Transfer, Deposit, Withdrawal, Reversal, Fee, Interest)
+amount (DECIMAL(18,4), Not Null)
+currency_code (CHAR(3), Foreign Key referencing CURRENCIES.currency_code, Not Null)
+execution_status (VARCHAR(16), Not Null, Allowed: Pending, Settled, Failed, Reversed)
+error_code (VARCHAR(32), Nullable)
+idempotency_key (VARCHAR(128), Unique, Not Null)
+initiated_timestamp (TIMESTAMP WITH TIME ZONE, Not Null)
+settled_timestamp (TIMESTAMP WITH TIME ZONE, Nullable)
+5. TRANSFER_DETAILS
+transfer_id (UUID, Primary Key, Immutable)
+transaction_id (UUID, Foreign Key referencing TRANSACTIONS.transaction_id, Unique, Not Null)
+payment_rail (VARCHAR(16), Not Null, Allowed: Internal, SEPA, SWIFT, FedNow, FasterPayments)
+exchange_rate (DECIMAL(12,6), Not Null, Default: 1.000000)
+settlement_reference (VARCHAR(64), Unique, Not Null)
+clearing_institution (VARCHAR(128), Nullable)
+6. BALANCE_AUDIT_LOGS
+audit_log_id (BIGINT, Identity, Primary Key)
+account_id (UUID, Foreign Key referencing ACCOUNTS.account_id, Not Null)
+transaction_id (UUID, Foreign Key referencing TRANSACTIONS.transaction_id, Not Null)
+balance_before (DECIMAL(18,4), Not Null)
+balance_after (DECIMAL(18,4), Not Null)
+recorded_timestamp (TIMESTAMP WITH TIME ZONE, Not Null)
+cryptographic_checksum (CHAR(64), Not Null, SHA-256 hash for tamper evidence)
+2.4 Integrity Constraints Matrix
+Domain Integrity: Strict data typing across all entities. Balance figures use high-precision decimals (DECIMAL(18,4)) rather than floating-point values to eliminate rounding errors.
+Entity Integrity: Every table enforces a non-nullable Primary Key using UUID v4 (universally unique identifiers) to support decentralized row creation across distributed shards.
+Referential Integrity: Enforced via foreign key constraints. Cascading deletes are forbidden across all tables (ON DELETE RESTRICT) to preserve audit and transaction histories.
+Enterprise Business Rules (Check Constraints):
+CHECK (current_balance >= -overdraft_limit): Prevents unauthorized negative balances.
+CHECK (amount > 0.0000): All transactions must have a positive value; debits and credits are determined by ledger entry type, not sign.
+CHECK (source_account_id IS NOT NULL OR destination_account_id IS NOT NULL): Prevents orphaned records.
+CHECK (source_account_id <> destination_account_id): Prevents self-transfers on the same account.
+2.5 Normalisation Analysis: From UNF to 3NF/BCNF
+Unnormalised Form (UNF)
+An initial unnormalized document contains repeating payment groups, multi-valued contact fields, and calculated redundancies:
+Customer_Record: {CustomerID, Name, Addresses[Home, Work], Accounts[{AccountID, Number, Balance, Transactions[{TxnID, Amount, Recipient, Currency, Date}]}]}
+First Normal Form (1NF)
+Action Taken: Eliminate repeating groups and ensure atomic values for each attribute.
+Outcome: Separate tables for CUSTOMERS, ACCOUNTS, and TRANSACTIONS. Remove compound names into first_name and last_name. Enforce primary keys on all tables.
+Second Normal Form (2NF)
+Action Taken: Eliminate partial dependencies. All non-key attributes must depend on the whole primary key.
+Analysis: In an intermediate model where TRANSACTION_ITEMS used a composite key of (transaction_id, account_id), fields like account_currency and account_status depended only on account_id.
+Outcome: Remove account_currency and account_status to the ACCOUNTS relation. Now, every non-key attribute in the transaction log depends entirely on the single-attribute primary key transaction_id.
+Third Normal Form (3NF)
+Action Taken: Eliminate transitive dependencies (non-key attributes depending on other non-key attributes).
+Analysis: In an unrefined ACCOUNTS schema, attributes like currency_name and decimal_places were determined by currency_code, which in turn was determined by account_id (account_id -> currency_code -> currency_name).
+Outcome: Extract currencies into a dedicated CURRENCIES reference entity (currency_code as primary key). ACCOUNTS now references currency_code via a foreign key, removing transitive dependencies.
+Boyce-Codd Normal Form (BCNF)
+Verification: For every functional dependency X -> Y, X must be a superkey.
+Outcome: In all defined relations (CUSTOMERS, ACCOUNTS, TRANSACTIONS, TRANSFER_DETAILS), every determinant is a candidate key or primary key. No non-trivial functional dependencies exist where the left-hand determinant is not a superkey. The schema satisfies BCNF.
