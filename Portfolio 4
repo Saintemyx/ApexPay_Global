@@ -1,1 +1,87 @@
+Business Justification for Polyglot Persistence
+While relational systems offer the ACID guarantees required for account ledgers, they face scaling and structural challenges when handling:
+High-volume, semi-structured clickstream telemetry, security context, and API device fingerprint audits.
+Microsecond-latency distributed session states, temporary authorization tokens, and API rate limiting.
+Complex multi-hop fraud detection networks (identifying mule accounts and shared device rings).
+ApexPay implements a Polyglot Persistence Model, combining the relational core with three purpose-built NoSQL architectures:
+Code
++----------------------------------------------------------------------------------------+
+|                               APEXPAY DATA STORAGE TIERS                               |
++--------------------------+-----------------------+-------------------------------------+
+| Engine Archetype         | Technology Target     | Primary Business Functionality      |
++--------------------------+-----------------------+-------------------------------------+
+| Relational (RDBMS)       | PostgreSQL / Aurora   | Core double-entry accounts ledger   |
+| Document Store           | MongoDB Atlas         | Dynamic audit trails and telemetry  |
+| Key-Value Store          | Redis Cluster         | Idempotency keys, user sessions     |
+| Graph Database           | Neo4j Enterprise      | Fraud prevention, AML ring analysis |
++--------------------------+-----------------------+-------------------------------------+
+5.2 Document Store Specification: Immutable Audit Logs
+The document database captures complex audit events that vary in structure, such as changes to compliance status, multi-factor authentication events, and API device fingerprints.
+Document Model Schema Definition
+Code
+Document Collection: platform_audit_events
+{
+  "_id": "UUID-String-550e8400-e29b-41d4-a716-446655440000",
+  "event_type": "FUNDS_TRANSFER_ATTEMPT",
+  "timestamp": "2023-10-24T14:32:10.124Z",
+  "actor": {
+    "user_id": "cust-99482",
+    "role": "ACCOUNT_HOLDER",
+    "ip_address": "198.51.100.42",
+    "geolocation": { "country": "GB", "city": "London" }
+  },
+  "action_payload": {
+    "source_account": "acct-102938",
+    "destination_account": "acct-904811",
+    "amount": 4500.00,
+    "currency": "GBP"
+  },
+  "device_fingerprint": {
+    "device_id": "dev-hash-883019",
+    "browser_user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5)",
+    "biometric_verified": true
+  },
+  "security_assessment": {
+    "fraud_risk_score": 0.08,
+    "action_taken": "ALLOW"
+  }
+}
+Suitability: The document store easily adapts to new security attributes (such as behavioral biometrics or new authentication factors) without requiring slow, locking schema alterations across millions of existing historical records.
+5.3 Key-Value Store Specification: Idempotency & Rate Limiting
+The Key-Value store operates entirely in-memory to provide microsecond response times for high-frequency operational guards.
+Key Naming Conventions and Expiration Lifecycle
+Code
+Key Pattern: idempotency:token:{idempotency_key_value}
+Data Type:   String (JSON serialized)
+TTL:         86,400 seconds (24 Hours)
+Value:       {"status": "COMMITTED", "txn_id": "UUID-771", "http_code": 200, "response_hash": "sha256-..."}
 
+Key Pattern: ratelimit:customer:{customer_id}:window:{minute_timestamp}
+Data Type:   Atomic Integer Counter
+TTL:         60 seconds
+Value:       "14" (Number of requests executed within the active window)
+Suitability: Using fast in-memory key-value lookups allows the system to enforce rate limits and verify idempotency tokens before reaching the core relational database, protecting the ledger from duplicate payments and denial-of-service traffic.
+5.4 Graph Database Specification: Real-Time Anti-Money Laundering (AML)
+Relational databases struggle to query deep, multi-hop connection paths (e.g., checking "Who sent money to an account that shares a device with a known bad actor?"). Graph databases excel at these relationship-focused queries.
+Code
+GRAPH NODE AND EDGE SPECIFICATION:
+
+[Customer Node] ──(OWNED_BY)──> [Device Node]
+      │                               ▲
+      │ (OWNS)                        │ (ACCESSED_FROM)
+      ▼                               │
+[Account Node] ──(TRANSFERRED_TO)──> [Account Node]
+Node Structure
+(:Customer {customer_id, full_name, kyc_status, risk_rating})
+(:Account {account_number, currency, current_balance})
+(:Device {device_id_hash, device_type, operating_system})
+(:IPAddress {ip_string, autonomous_system, is_vpn})
+Edge (Relationship) Structure
+[:OWNS {opened_date}] connects Customer to Account
+[:TRANSFERRED_TO {amount, timestamp, currency, reference}] connects Account to Account
+[:AUTHENTICATED_WITH {timestamp, session_id}] connects Customer to Device
+Fraud Detection Scenario: Money Mule Ring Identification
+Graph pattern matching traverses these connections to detect suspicious circles where funds move across accounts that share identical device fingerprints or physical IP addresses:
+Traverse outgoing transactions from target Account across 3 hops.
+Cross-reference device identifiers used to authenticate those receiving accounts.
+If distinct customers access their accounts from the same physical hardware, flag the entire ring for manual compliance review.
