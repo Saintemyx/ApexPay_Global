@@ -1,1 +1,68 @@
+1 Distributed System Architecture: Global Multi-Region Topology
+To balance high availability, low latency, and regulatory compliance around data residency, ApexPay runs a distributed cloud database model:
+Code
++---------------------------------------------------------------------------------------+
+|                          PRIMARY ACTIVE REGION (EUROPE - WEST)                        |
+|                                                                                       |
+|   +---------------------+           Synchronous           +---------------------+     |
+|   |   Primary Writer    |====== Storage Replication =====>| Synchronous Standby |     |
+|   |  (Read/Write Node)  |                                 |   (Hot Failover)    |     |
+|   +---------------------+                                 +---------------------+     |
++--------------│------------------------------------------------------------------------+
+               │
+               │ Asynchronous Cross-Region Replication (Zero-Loss Pipeline)
+               ▼
++---------------------------------------------------------------------------------------+
+|                         SECONDARY DR REGION (AMERICAS - EAST)                         |
+|                                                                                       |
+|   +---------------------+                                 +---------------------+     |
+|   |    Read Replica     |====== Storage Replication =====>|     Read Replica    |     |
+|   | (Analytics/Audits)  |                                 | (Disaster Recovery) |     |
+|   +---------------------+                                 +---------------------+     |
++---------------------------------------------------------------------------------------+
 
+2 Data Partitioning and Sharding Strategies
+With more than 4 million accounts generating heavy transactional volume, a single database instance will eventually face storage and write throughput bottlenecks. ApexPay resolves this through Horizontal Database Sharding.
+Sharding Key Evaluation
+Rejected Alternative: Sharding by Timestamp: Causes write-hotspotting, where all incoming writes hit the single current partition while historical partitions sit idle.
+Selected Strategy: Hybrid Hash-Range Sharding on customer_id:
+Routing Logic: The shard router applies a cryptographic hash function to the customer_id: Shard_ID = Hash(customer_id) Modulo Total_Shards.
+Locality Benefit: All accounts, balances, and outgoing transfers for a specific customer reside on the same physical shard. This ensures that typical account lookups and balance updates run locally without distributed network hops.
+Handling Cross-Shard Distributed Transfers
+When a transfer sends funds from an account on Shard A to an account on Shard B, the system uses a Two-Phase Commit (2PC) protocol managed by a distributed transaction coordinator:
+Prepare Phase: The coordinator writes a global prepare message and instructs both shards to lock the relevant rows, verify available balances, and write changes to their local transaction logs. Both shards confirm readiness (Vote_Commit).
+Commit Phase: Once all participating shards vote to proceed, the coordinator writes a permanent commit record and orders both shards to apply their balance changes and release locks. If either shard fails to prepare, all shards roll back.
+
+3 CAP and PACELC Theoretical Evaluation
+Code
++----------------------------------------------------------------------------------------+
+| CAP / PACELC TRADE-OFF EVALUATION FOR FINPAY/APEXPAY                                   |
++-------------------+--------------------------------------------------------------------+
+| Dimension         | Architecture Choice & Justification                                |
++-------------------+--------------------------------------------------------------------+
+| CAP Theorem       | Strict CP (Consistency + Partition Tolerance)                     |
+| Classification    | Financial ledgers cannot sacrifice consistency for availability.   |
+|                   | If network partitions occur, the system rejects transfers that     |
+|                   | cannot be safely verified rather than risk double-spending.        |
++-------------------+--------------------------------------------------------------------+
+| PACELC Model      | PC / EC (Partition: Consistency over Availability;                 |
+| Classification    | Else: Consistency over Latency)                                    |
+|                   | In normal operations, the database prioritizes strong read-after-  |
+|                   | write consistency over lower query latency for all balance writes. |
++-------------------+--------------------------------------------------------------------+
+
+4 Cloud-Native Database Engine Comparative Analysis
+Code
++-----------------------------+-------------------------------+-------------------------------+
+| Architectural Metric        | Amazon Aurora Global Database | Google Cloud Spanner          |
++-----------------------------+-------------------------------+-------------------------------+
+| Core Underlying Model       | Shared-Storage RDBMS (MySQL/PG)| Distributed Shared-Nothing    |
+| Replication Mechanism       | Low-latency log-buffer storage| TrueTime API + Paxos Consensus|
+| Cross-Region Consistency    | Asynchronous (< 1 second)     | Externally Consistent (Strong)|
+| Horizontal Write Scale      | Single-writer node per cluster| Multi-region, multi-master    |
+| Recovery Time Objective(RTO)| < 1 minute (Cluster failover) | 0 seconds (Immediate Paxos)   |
+| Recovery Point Target (RPO) | < 1 second of data            | Absolute 0 (Zero data loss)   |
+| Implementation Fit          | Best for traditional relational| Best for hyper-scale, global  |
+|                             | workloads needing low changes.| multi-region active writes.   |
++-----------------------------+-------------------------------+-------------------------------+
+Final Cloud Architecture Decision: ApexPay deploys on Google Cloud Spanner for its core global transaction ledger to take advantage of its TrueTime atomic clock synchronization, which guarantees strict external consistency across continents without needing risky manual failover steps.
