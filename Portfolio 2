@@ -1,1 +1,80 @@
-
+Workload Profile & Target Query Specifications
+Query Scenario A: Real-Time Customer Account Ledger Extraction
+Business Objective: Retrieve the complete, balance-reconciled transaction history for a specific customer over the trailing 30 days, sorted chronologically for mobile app display.
+Relational Operations:
+Join CUSTOMERS to ACCOUNTS on customer_id.
+Join ACCOUNTS to TRANSACTIONS matching either source or destination identifiers.
+Filter on customer_id and initiated_timestamp >= Current_Date - 30 Days.
+Order results by initiated_timestamp DESC.
+Query Scenario B: High-Value Settlement Risk and Anomaly Filter
+Business Objective: Scan all transfers executed within the past 4 hours that exceed $10,000 USD equivalent where the account status is flagged as high-risk or the KYC status is incomplete.
+Relational Operations:
+Join TRANSACTIONS with TRANSFER_DETAILS on transaction_id.
+Join with ACCOUNTS on source_account_id.
+Join with CUSTOMERS on customer_id.
+Filter on amount >= 10000.00, initiated_timestamp >= Current_Time - 4 Hours, and (risk_score > 0.70 OR kyc_status <> 'Verified').
+Query Scenario C: End-of-Day Ledger Reconciliation Audit
+Business Objective: Aggregate total debits, credits, and net turnover across every active currency within a 24-hour cycle to verify overall double-entry balance equality.
+Relational Operations:
+Filter TRANSACTIONS on execution_status = 'Settled' and date boundaries.
+Group by currency_code and transaction_type.
+Compute SUM(amount), COUNT(transaction_id).
+3.2 Execution Plan Dynamics & Baseline Performance (Unindexed)
+Code
+BASELINE EXECUTION PATH (Unindexed Query Scenario A):
++----------------------------------------------------------------------------------+
+| Gather Merge (Parallel workers: 2)                                              |
+| Cost: 125,480.00..128,940.50 | Rows: 4,200 | Width: 256 bytes                    |
+|   -> Sort Key: t.initiated_timestamp DESC                                        |
+|        -> Hash Join (Join Cond: t.source_account_id = a.account_id)              |
+|             -> Parallel Seq Scan on TRANSACTIONS (Cost: 0.00..98,420.00, Rows:8M)|
+|                  Filter: initiated_timestamp >= (NOW() - '30 days'::interval)    |
+|                  Rows Removed by Filter: 7,850,000                              |
+|             -> Hash (Cost: 12,400.00)                                            |
+|                  -> Seq Scan on ACCOUNTS (Cost: 0.00..12,400.00, Rows: 4.2M)    |
+|                       Filter: customer_id = 'c4b8-...'                          |
++----------------------------------------------------------------------------------+
+Detailed Baseline Failure Analysis
+Parallel Sequential Scans: Because no indexes exist on TRANSACTIONS.initiated_timestamp or foreign keys, the database engine scans all 8.5 million rows from physical storage into memory buffers.
+Hash Join Memory Overhead: The engine reads the entire ACCOUNTS table to build an in-memory hash table, spilling to temporary disk space (work_mem exhaustion) if allocated memory limits are exceeded.
+Expensive External Sort: Sorting thousands of unindexed transaction records by timestamp requires an external disk merge-sort, driving up query latency to 1,850ms–2,400ms, which breaches sub-second SLA thresholds.
+3.3 Indexing Strategy & Architectural Optimisation
+To eliminate full table scans and reduce memory usage during joins and sorting, we apply a multi-tier indexing strategy:
+Code
++------------------+-----------------------------+-----------------------+---------------------------------------+
+| Target Table     | Index Type                  | Indexed Columns       | Operational Purpose                   |
++------------------+-----------------------------+-----------------------+---------------------------------------+
+| ACCOUNTS         | Unique B-Tree Clustered     | account_id            | Instant PK point lookups              |
+| ACCOUNTS         | Non-Clustered B-Tree        | customer_id           | Speeds up customer-to-account joins   |
+| TRANSACTIONS     | Composite B-Tree            | (source_account_id,   | Covers directional history searches   |
+|                  |                             |  initiated_timestamp) | without sorting                       |
+| TRANSACTIONS     | Composite B-Tree            | (dest_account_id,     | Covers incoming transfer searches     |
+|                  |                             |  initiated_timestamp) | without sorting                       |
+| TRANSACTIONS     | Partial/Filtered B-Tree     | transaction_id, amount| Indexes only unsettled items          |
+|                  |                             | WHERE status='Pending'| for rapid clearing queue processing   |
++------------------+-----------------------------+-----------------------+---------------------------------------+
+3.4 Optimized Execution Plan & Performance Evaluation
+Code
+OPTIMIZED EXECUTION PATH (Indexed Query Scenario A):
++----------------------------------------------------------------------------------+
+| Incremental Sort                                                                 |
+| Cost: 12.40..182.20 | Rows: 420 | Width: 256 bytes                               |
+|   -> Nested Loop                                                                 |
+|        -> Index Scan using idx_accounts_customer_id on ACCOUNTS                  |
+|             Index Cond: customer_id = 'c4b8-...'                                 |
+|             Cost: 0.43..8.50 | Rows: 3 accounts retrieved                        |
+|        -> Index Scan using idx_txns_source_timestamp on TRANSACTIONS             |
+|             Index Cond: (source_account_id = a.account_id AND                     |
+|                          initiated_timestamp >= (NOW() - '30 days'::interval))   |
+|             Cost: 0.56..57.80 | Rows: 140 records per account                    |
++----------------------------------------------------------------------------------+
+Performance Comparison Metrics
+Code
++-------------------------------------+--------------------+--------------------+-------------------+
+| Metric Measurement                  | Baseline (Scan)    | Optimized (Index)  | Net Improvement   |
++-------------------------------------+--------------------+--------------------+-------------------+
+| Total Query Cost Units              | 128,940.50         | 182.20             | 99.85% Reduction  |
+| Wall-Clock Execution Time           | 2,120.45 ms        | 4.12 ms            | 514x Speedup      |
+| Shared Buffer Blocks Read (Disk)    | 48,210 blocks      | 14 blocks          | 99.97% Reduction  |
+| Shared Buffer Blocks Hit (Cache)    | 12,450 blocks      | 88 blocks          | Efficient working |
+| Memory Spillage to Disk             | 18.4 MB (Temp File)| 0.0 MB             | Zero disk spill   |
