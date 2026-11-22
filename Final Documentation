@@ -1,1 +1,24 @@
+Executive Project Synthesis (Deliverable Summary)
+Over five distinct architectural phases, this portfolio designs, optimizes, and evaluates a resilient database platform for ApexPay:
+Portfolio 1 (Data Design): Built an enterprise-grade relational schema in Boyce-Codd Normal Form (BCNF), with strict database constraints enforcing double-entry ledger safety and complete entity integrity.
+Portfolio 2 (Optimization): Modeled high-volume transaction queries, analyzed baseline full-table scans, and applied targeted composite and partial indexes to drop execution latency by 99.8%.
+Portfolio 3 (Concurrency): Established safe transaction boundaries and isolation settings, showing how MVCC and structured row-level locking prevent deadlocks, dirty reads, and lost updates during parallel transfers.
+Portfolio 4 (NoSQL): Integrated a polyglot persistence architecture, using document stores for audit logs, in-memory caches for rate limiting, and graph databases for multi-hop fraud detection.
+Portfolio 5 (Distributed Cloud): Designed a globally distributed, sharded cloud database topology that uses a CP-focused Paxos consensus model to balance high availability with zero-loss financial consistency.
 
+2 Practical Evidence and Screenshot Capture Roadmap
+
+3 Critical Individual Reflection
+Working through this financial technology platform highlights the clear operational trade-offs required in database engineering. While software engineering often values high write availability and eventual consistency, banking workloads demand strict consistency. Implementing high-throughput P2P transfers shows that fast performance cannot come at the expense of correct, atomic operations.
+Moving from single-instance relational designs to a sharded, distributed polyglot system introduces real challenges around network delays, split-brain risks, and cross-shard locking. The most important takeaway from this architecture is that no single database engine fits all operational needs. Balancing relational systems for money movement with document stores for flexible audit logs and graph databases for fraud detection delivers the best combination of security, compliance, and real-time performance.
+
+4 Declarations and Professional Standards
+Academic Integrity & Ethical Declarations
+Originality Statement: This portfolio constitutes original engineering design work developed for academic assessment. The business domain, architectural constraints, and structural models were created specifically for the ApexPay case study.
+Artificial Intelligence Usage Declaration: Artificial intelligence tools were consulted as an architectural sounding board to review edge-case concurrency anomalies and formatting templates. All final structural specifications, trade-off evaluations, normalisation analyses, and schema designs were critically verified, authored, and curated by the student.
+
+Professional References
+Kleppmann, M. (2017). Designing Data-Intensive Applications: The Big Ideas Behind Reliable, Scalable, and Maintainable Systems. O'Reilly Media.
+Date, C. J. (2019). Database Design and Relational Theory: Normal Forms and All That Jazz. Apress.
+Corbett, J. C., et al. (2013). Spanner: Google’s Globally Distributed Database. ACM Transactions on Computer Systems (TOCS), 31(3), 1-22.
+Bernstein, P. A., & Newcomer, E. (2009). Principles of Transaction Processing. Morgan Kaufmann.
