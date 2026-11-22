@@ -1,1 +1,11 @@
-
+ApexPay is a regulated digital neobank and financial technology platform providing consumer retail banking, corporate liquidity management, and instant peer-to-peer (P2P) transfers across multi-currency ledgers.
+Operational Scale
+Active User Base: 2.5 million verified retail and commercial customers.
+Account Portfolio: 4.2 million multi-currency accounts (Checking, Savings, Business Liquidity, Escrow).
+Transaction Velocity: 8.5 million discrete financial events per month, peaking at 1,500 transactions per second during business settlement windows.
+Critical Business Rules and Ledger Invariants
+Double-Entry Bookkeeping: Money cannot appear or vanish arbitrarily. Every fund transfer must execute as an atomic pair: a balanced debit from the originating account and a credit to the destination account.
+Strict Balance Invariants: Standard consumer accounts must never reach a negative available balance. Overdraft-enabled accounts must never exceed explicitly approved credit limits.
+Transaction Immutability: Once committed, a financial transaction record can never be modified or deleted. Errors must be rectified exclusively through compensating transactions (reversals).
+Comprehensive Auditability: Every balance change, system-level adjustment, or reconciliation check must generate an append-only audit trail capturing before-and-after states, timestamps, and authorized identities.
+Customer Identification: All accounts must link to a fully verified Customer record compliant with Know Your Customer (KYC) and Anti-Money Laundering (AML) standards.
